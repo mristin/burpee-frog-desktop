@@ -329,7 +329,7 @@ JUMP_BUTTONS = {
 #: expected.
 #:
 #: In seconds.
-TIME_TOLERANCE_OF_JUMP_BUTTONS = 0.5
+TIME_TOLERANCE_OF_JUMP_BUTTONS = 1.25
 
 
 def update_vehicles(state: State, media: Media) -> None:
