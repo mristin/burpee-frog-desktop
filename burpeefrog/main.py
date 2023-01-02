@@ -796,6 +796,13 @@ def render_game(state: State, media: Media) -> pygame.surface.Surface:
 
         scene.blit(media.frog_sprites[frog_sprite_i], state.frog.xy)
 
+    if int(state.now / 0.5) % 2 == 0:
+        heart = pygame.transform.scale(media.heart_sprite, (13, 13))
+    else:
+        heart = pygame.transform.scale(media.heart_sprite, (10, 10))
+
+    scene.blit(heart, (190, 15))
+
     return scene
 
 
