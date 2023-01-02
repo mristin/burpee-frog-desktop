@@ -12,7 +12,7 @@ from typing import Optional, Final, List, MutableMapping, Union, Tuple
 
 import pygame
 import pygame.freetype
-from icontract import require
+from icontract import require, snapshot, ensure
 
 import burpeefrog
 import burpeefrog.events
@@ -61,10 +61,10 @@ SCENE_HEIGHT = 510
 LANE_HEIGHT = SCENE_HEIGHT // 13
 
 #: Velocity of the vehicles in the lanes, in pixels / second
-VEHICLE_VELOCITY = 0.06
+VEHICLE_VELOCITY = 15
 
 #: Velocity of the trunks in the river, in pixels / second
-TRUNK_VELOCITY = 0.06
+TRUNK_VELOCITY = 25
 TRUNK_WIDTH = 200
 
 FROG_WIDTH = 25
@@ -126,7 +126,11 @@ def load_media() -> Media:
         heart_sprite=pygame.image.load(
             str(PACKAGE_DIR / "media/images/heart.png")
         ).convert_alpha(),
-        font=pygame.freetype.Font(str(PACKAGE_DIR / "media/fonts/freesansbold.ttf")),  # type: ignore
+        # fmt: off
+        font=pygame.freetype.Font(            # type: ignore
+            str(PACKAGE_DIR / "media/fonts/freesansbold.ttf")
+        ),
+        # fmt: on
         jump_sound=pygame.mixer.Sound(str(PACKAGE_DIR / "media/sfx/jump.ogg")),
         squash_sound=pygame.mixer.Sound(str(PACKAGE_DIR / "media/sfx/squash.ogg")),
         drowning_sound=pygame.mixer.Sound(str(PACKAGE_DIR / "media/sfx/drowning.ogg")),
@@ -332,13 +336,16 @@ JUMP_BUTTONS = {
 TIME_TOLERANCE_OF_JUMP_BUTTONS = 1.25
 
 
-def update_vehicles(state: State, media: Media) -> None:
+def update_vehicles(state: State, media: Media, time_delta: float) -> None:
     """Move vehicles, spawn new ones and remove those that left."""
-    for lane_i, lane in enumerate(state.lanes):
+    for lane_index, lane in enumerate(state.lanes):
         if isinstance(lane, VehicleLane):
             # Move
             for vehicle in lane.vehicles:
-                vehicle.xy = (vehicle.xy[0] + vehicle.velocity, vehicle.xy[1])
+                vehicle.xy = (
+                    vehicle.xy[0] + vehicle.velocity * time_delta,
+                    vehicle.xy[1],
+                )
 
             # Spawn and remove
             spawn = False
@@ -360,13 +367,13 @@ def update_vehicles(state: State, media: Media) -> None:
                         updated_vehicles.append(vehicle)
 
             if spawn:
-                direction = 1 if lane_i % 2 == 0 else -1
+                direction = lane_direction(lane_index)
                 velocity = direction * VEHICLE_VELOCITY
                 sprite = random.choice(media.vehicle_sprites)
 
                 vehicle_y = (
                     SCENE_HEIGHT
-                    - ((lane_i + 1) * LANE_HEIGHT)
+                    - ((lane_index + 1) * LANE_HEIGHT)
                     + (LANE_HEIGHT - sprite.get_height()) // 2
                 )
 
@@ -433,7 +440,108 @@ def find_trunk_on_which_frog(state: State) -> Optional[Trunk]:
     return None
 
 
-def update_trunks_and_sail_frog(state: State, media: Media) -> None:
+@ensure(lambda result: result in (-1, 1))
+def lane_direction(lane_index: int) -> int:
+    """Compute the lane direction based on the lane index."""
+    return 1 if lane_index % 2 == 0 else -1
+
+
+def remove_trunks_which_left_the_scene(state: State) -> None:
+    """Iterate over all the trunks and remove those which left the scene."""
+    for lane in state.lanes:
+        if isinstance(lane, TrunkLane):
+            updated_trunks = []
+
+            for trunk in lane.trunks:
+                if trunk.velocity >= 0 and trunk.xy[0] >= SCENE_WIDTH:
+                    continue
+
+                if trunk.velocity < 0 and trunk.xy[0] + trunk.sprite.get_width() < 0:
+                    continue
+
+                updated_trunks.append(trunk)
+
+            lane.trunks[:] = updated_trunks
+
+
+# fmt: off
+@require(
+    lambda state, lane_index:
+    0 <= lane_index < len(state.lanes)
+    and isinstance(state.lanes[lane_index], TrunkLane)
+)
+@snapshot(lambda state, lane_index: state.lanes[lane_index].trunks, name="trunks")
+@ensure(
+    lambda state, lane_index, OLD:
+    (
+        lane := state.lanes[lane_index],
+        direction := lane_direction(lane_index),
+        isinstance(lane, TrunkLane)
+        and (
+            (
+                not (direction == 1) or (lane.trunks[1:] == OLD.trunks)
+            ) or (
+                not (direction == -1) or (lane.trunks[:-1] == OLD.trunks)
+            )
+        )
+    )[2],
+    "One trunk added"
+)
+# fmt: on
+def spawn_new_trunk(state: State, lane_index: int, media: Media) -> None:
+    """Spawn a new trunk in the lane."""
+    lane = state.lanes[lane_index]
+    assert isinstance(lane, TrunkLane)
+
+    sprite = random.choice(media.trunk_sprites)
+    trunk_y = (
+        SCENE_HEIGHT
+        - ((lane_index + 1) * LANE_HEIGHT)
+        + (LANE_HEIGHT - sprite.get_height()) // 2
+    )
+
+    direction = lane_direction(lane_index)
+
+    time_distance_between_trunks = 4 + random.random()
+    space_distance_between_trunks = TRUNK_VELOCITY * time_distance_between_trunks
+
+    if direction >= 0:
+        neighbour_trunk = None  # type: Optional[Trunk]
+        if len(lane.trunks) > 0:
+            neighbour_trunk = lane.trunks[0]
+
+        if neighbour_trunk is not None:
+            trunk_x = (
+                neighbour_trunk.xy[0]
+                - space_distance_between_trunks
+                - sprite.get_width()
+            )
+        else:
+            trunk_x = -sprite.get_width() - random.random() * 3
+
+        lane.trunks.insert(
+            0, Trunk(sprite=sprite, xy=(trunk_x, trunk_y), velocity=TRUNK_VELOCITY)
+        )
+    else:
+        neighbour_trunk = None
+        if len(lane.trunks) > 0:
+            neighbour_trunk = lane.trunks[-1]
+
+        if neighbour_trunk is not None:
+            trunk_x = (
+                neighbour_trunk.xy[0]
+                + neighbour_trunk.sprite.get_width()
+                + space_distance_between_trunks
+            )
+        else:
+            trunk_x = SCENE_WIDTH + random.random() * 3
+
+        lane.trunks.append(
+            Trunk(sprite=sprite, xy=(trunk_x, trunk_y), velocity=-TRUNK_VELOCITY)
+        )
+
+
+def update_trunks_and_sail_frog(state: State, media: Media, time_delta: float) -> None:
     """
     Move trunks, spawn new ones and remove those that left.
 
@@ -443,58 +551,21 @@ def update_trunks_and_sail_frog(state: State, media: Media) -> None:
     trunk_on_which_frog = find_trunk_on_which_frog(state)
     if trunk_on_which_frog is not None:
         state.frog.xy = (
-            state.frog.xy[0] + trunk_on_which_frog.velocity,
+            state.frog.xy[0] + trunk_on_which_frog.velocity * time_delta,
             state.frog.xy[1],
         )
 
-    for lane_i, lane in enumerate(state.lanes):
+    for lane_index, lane in enumerate(state.lanes):
         if isinstance(lane, TrunkLane):
+            # Spawn, if necessary
+            while len(lane.trunks) <= 3:
+                spawn_new_trunk(state, lane_index, media)
+
             # Move
             for trunk in lane.trunks:
-                trunk.xy = (trunk.xy[0] + trunk.velocity, trunk.xy[1])
+                trunk.xy = (trunk.xy[0] + trunk.velocity * time_delta, trunk.xy[1])
 
-            # Spawn and remove
-            spawn = False
-
-            updated_trunks = []
-
-            if len(lane.trunks) == 0:
-                spawn = True
-            else:
-                for trunk in lane.trunks:
-                    if trunk.velocity >= 0 and trunk.xy[0] >= SCENE_WIDTH:
-                        spawn = True
-                    elif (
-                        trunk.velocity < 0
-                        and trunk.xy[0] + trunk.sprite.get_width() < 0
-                    ):
-                        spawn = True
-                    else:
-                        updated_trunks.append(trunk)
-
-            if spawn:
-                direction = 1 if lane_i % 2 == 0 else -1
-                velocity = direction * TRUNK_VELOCITY
-                sprite = random.choice(media.trunk_sprites)
-
-                trunk_y = (
-                    SCENE_HEIGHT
-                    - ((lane_i + 1) * LANE_HEIGHT)
-                    + (LANE_HEIGHT - sprite.get_height()) // 2
-                )
-
-                if velocity >= 0:
-                    xy = (-sprite.get_width() - random.random() * 20, trunk_y)
-                    updated_trunks.insert(
-                        0, Trunk(sprite=sprite, xy=xy, velocity=velocity)
-                    )
-                else:
-                    xy = (SCENE_WIDTH + random.random() * 20, trunk_y)
-                    updated_trunks.append(
-                        Trunk(sprite=sprite, xy=xy, velocity=velocity)
-                    )
-
-            lane.trunks[:] = updated_trunks
+    remove_trunks_which_left_the_scene(state)
 
 
 def handle_in_game(
@@ -531,6 +602,8 @@ def handle_in_game(
         state.jump_pending = True
 
     elif isinstance(event, burpeefrog.events.Tick):
+        time_delta = now - state.now
+
         state.now = now
 
         frog_lane_index = lane_index_for_y(state, y=state.frog.xy[1])
@@ -559,17 +632,19 @@ def handle_in_game(
                 state.frog.xy = state.frog.jump.target_xy
                 state.frog.jump = None
             else:
+                # fmt: off
                 pixels_jumped = (
                     (now - state.frog.jump.start)
                     / (state.frog.jump.eta - state.frog.jump.start)
                 ) * JUMP_DISTANCE
+                # fmt: on
 
                 state.frog.xy = (
                     state.frog.jump.origin_xy[0],
                     state.frog.jump.origin_xy[1] - pixels_jumped,
                 )
 
-        update_vehicles(state, media)
+        update_vehicles(state, media, time_delta)
 
         # Check the collision between the frog and the car
         frog_lane_index = lane_index_for_y(state, y=state.frog.xy[1])
@@ -593,7 +668,7 @@ def handle_in_game(
                         )
                     )
 
-        update_trunks_and_sail_frog(state, media)
+        update_trunks_and_sail_frog(state, media, time_delta)
 
         # Check if the frog drowned
         if (
@@ -818,6 +893,7 @@ def main(prog: str) -> int:
 
     # noinspection PyUnusedLocal
     active_joystick = None  # type: Optional[pygame.joystick.Joystick]
+
     if len(joysticks) == 0:
         print(
             f"There are no joysticks plugged in. "
