@@ -322,8 +322,6 @@ def initialize_state(state: State, game_start: float) -> None:
 JUMP_BUTTONS = {
     burpeefrog.events.Button.CROSS,
     burpeefrog.events.Button.CIRCLE,
-    burpeefrog.events.Button.SQUARE,
-    burpeefrog.events.Button.TRIANGLE,
 }
 
 #: Time delta within which all jump buttons must be pressed down.
