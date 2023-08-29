@@ -4,6 +4,8 @@ burpee-frog
 
 Jump burpees and lead the frog to its beloved one.
 
+Press the buttons "X" and "O" at the same time for the jump.
+
 .. image:: https://media.githubusercontent.com/media/mristin/burpee-frog-desktop/main/screenshot.gif
     :alt: Screenshot
 
